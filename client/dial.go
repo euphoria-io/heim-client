@@ -56,20 +56,47 @@ func (hc *Client) run() {
 	ch := make(chan *proto.Packet, 10)
 	go hc.readMessages(ch)
 
+	disconnected := false
+
+	defer func() {
+		if !disconnected {
+			event := &proto.DisconnectEvent{}
+			if err := hc.ctx.Err(); err != nil {
+				event.Reason = err.Error()
+			} else {
+				event.Reason = "connection closed"
+			}
+			packet, err := proto.MakeEvent(event)
+			if err != nil {
+				hc.l.Printf("error making synthetic disconnect-event: %s", err)
+				return
+			}
+			if err := hc.f.Handle(packet); err != nil && err != errNotHandled {
+				hc.l.Printf("error handling synthetic disconnect-event: %s", err)
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-hc.ctx.Done():
 			return
 
 		case packet := <-ch:
+			if packet.Type == proto.DisconnectEventType {
+				disconnected = true
+			}
+
 			hc.m.Lock()
 			replyCh, ok := hc.outstanding[packet.ID]
 			delete(hc.outstanding, packet.ID)
 			hc.m.Unlock()
+
 			if ok {
 				replyCh <- packet
 				continue
 			}
+
 			if err := hc.f.Handle(packet); err != nil {
 				if err == errNotHandled {
 					hc.l.Printf("ignoring packet of type %s", packet.Type)
