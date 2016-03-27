@@ -195,7 +195,17 @@ func (hc *Client) Close() error {
 	return hc.c.Close()
 }
 
-func DialRoom(ctx scope.Context, baseUrl, room string) (*Client, error) {
+func DialRoom(ctx scope.Context, baseUrl, room string, options ...interface{}) (*Client, error) {
+	var cj http.CookieJar
+	for _, opt := range options {
+		switch v := opt.(type) {
+		case http.CookieJar:
+			cj = v
+		default:
+			return nil, fmt.Errorf("invalid option of type %T", opt)
+		}
+	}
+
 	roomUrl := fmt.Sprintf("%s/room/%s", baseUrl, room)
 	fail := func(err error) error {
 		return fmt.Errorf("dial %s: %s", roomUrl, err)
@@ -228,8 +238,12 @@ func DialRoom(ctx scope.Context, baseUrl, room string) (*Client, error) {
 
 	u.Path = u.Path + "/ws"
 
-	hs := http.Header{
-		"Origin": {roomUrl},
+	hs := http.Header{}
+	hs.Set("Origin", roomUrl)
+	if cj != nil {
+		for _, cookie := range cj.Cookies(u) {
+			hs.Set("Cookie", cookie.String())
+		}
 	}
 
 	logger.Printf("opening websocket: %s", u.String())
@@ -243,8 +257,9 @@ func DialRoom(ctx scope.Context, baseUrl, room string) (*Client, error) {
 		return nil, fail(err)
 	}
 
-	// TODO: read cookies
-	_ = resp
+	if cj != nil {
+		cj.SetCookies(u, resp.Cookies())
+	}
 
 	hc := &Client{
 		ctx:         ctx.Fork(),
